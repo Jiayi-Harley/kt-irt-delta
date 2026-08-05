@@ -1,0 +1,17 @@
+# third-party: cloned separately, has its own .git and is large
+pykt-toolkit/
+
+# generated data and trained models (regenerable, large)
+*.npz
+*.ckpt
+saved_model/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# os / editor
+.DS_Store
+.vscode/
