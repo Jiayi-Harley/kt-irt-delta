@@ -25,13 +25,13 @@ from scipy.stats import pearsonr, spearmanr
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # code/
 PYKT = os.path.join(_ROOT, "pykt-toolkit")
-DATA = os.path.join(PYKT, "data", "assist2009")
 
 from pykt.datasets.que_data_loader import KTQueDataset
 from pykt.models.init_model import init_model
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--ckpt", required=True, help="saved_model/<run>/ dir or the .ckpt file")
+ap.add_argument("--dataset", default="assist2009")
 ap.add_argument("--emb_size", type=int, default=64)
 ap.add_argument("--dropout", type=float, default=0.4)
 ap.add_argument("--mlp_layer_num", type=int, default=2)
@@ -40,7 +40,8 @@ ap.add_argument("--K", type=int, default=10)
 a = ap.parse_args()
 
 device = "cpu"
-data_cfg = json.load(open(os.path.join(PYKT, "configs", "data_config.json")))["assist2009"]
+DATA = os.path.join(PYKT, "data", a.dataset)
+data_cfg = json.load(open(os.path.join(PYKT, "configs", "data_config.json")))[a.dataset]
 
 # --- test dataset exactly like pykt (question level, folds=[-1]) ---
 test_ds = KTQueDataset(os.path.join(DATA, data_cfg["test_file_quelevel"]),
