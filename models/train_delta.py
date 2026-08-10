@@ -13,6 +13,8 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 
 torch.manual_seed(0); np.random.seed(0)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print("device:", device)
 
 # --- load samples ---
 import sys
@@ -53,7 +55,7 @@ class DeltaKT(nn.Module):
         z = torch.cat([h, theta_b.unsqueeze(1)], dim=1)
         return self.head(z).squeeze(1)             # (B,) predicted Δθ
 
-model = DeltaKT(2 * n_concepts)
+model = DeltaKT(2 * n_concepts).to(device)
 opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-3)   # weight_decay = L2 reg
 mse = nn.MSELoss()
 
@@ -64,7 +66,7 @@ base_val_mse = ((delta[val_i] - train_mean) ** 2).mean().item()
 def eval_val():
     model.eval()
     with torch.no_grad():
-        preds = torch.cat([model(xb, tb) for xb, tb, _ in val_dl])
+        preds = torch.cat([model(xb.to(device), tb.to(device)).cpu() for xb, tb, _ in val_dl])
         ytrue = torch.cat([yb for _, _, yb in val_dl])
     return mse(preds, ytrue).item(), np.corrcoef(preds.numpy(), ytrue.numpy())[0, 1]
 
@@ -73,6 +75,7 @@ best_mse, best_corr = 1e9, 0.0
 for epoch in range(40):
     model.train()
     for xb, tb, yb in tr_dl:
+        xb, tb, yb = xb.to(device), tb.to(device), yb.to(device)
         opt.zero_grad()
         mse(model(xb, tb), yb).backward(); opt.step()
     vm, vc = eval_val()

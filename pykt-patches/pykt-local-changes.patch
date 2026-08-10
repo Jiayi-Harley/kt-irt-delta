@@ -1,0 +1,25 @@
+diff --git a/pykt/models/que_base_model.py b/pykt/models/que_base_model.py
+index 9359126..319af55 100644
+--- a/pykt/models/que_base_model.py
++++ b/pykt/models/que_base_model.py
+@@ -253,6 +253,7 @@ class QueBaseModel(nn.Module):
+         data_new['tshft'] = dcur["shft_tseqs"]
+         data_new['m'] = dcur["masks"]
+         data_new['sm'] = dcur["smasks"]
++        data_new = {k: (v.to(self.device) if torch.is_tensor(v) else v) for k, v in data_new.items()}
+         return data_new
+ 
+     def train(self,train_dataset, valid_dataset,batch_size=16,valid_batch_size=None,num_epochs=32, test_loader=None, test_window_loader=None,save_dir="tmp",save_model=False,patient=10,shuffle=True,process=True):
+diff --git a/pykt/preprocess/assist2009_preprocess.py b/pykt/preprocess/assist2009_preprocess.py
+index 50217aa..10fa443 100644
+--- a/pykt/preprocess/assist2009_preprocess.py
++++ b/pykt/preprocess/assist2009_preprocess.py
+@@ -8,7 +8,7 @@ KEYS = ["user_id", "skill_id", "problem_id"]
+ def read_data_from_csv(read_file, write_file):
+     stares = []
+ 
+-    df = pd.read_csv(read_file, encoding = 'utf-8', dtype=str)
++    df = pd.read_csv(read_file, encoding = 'latin-1', dtype=str)
+ 
+     ins, us, qs, cs, avgins, avgcq, na = sta_infos(df, KEYS, stares)
+     print(f"original interaction num: {ins}, user num: {us}, question num: {qs}, concept num: {cs}, avg(ins) per s: {avgins}, avg(c) per q: {avgcq}, na: {na}")
