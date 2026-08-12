@@ -40,17 +40,21 @@ ap.add_argument("--corr_w", type=float, default=1.0, help="weight on QIKT correc
 ap.add_argument("--epochs", type=int, default=30)
 ap.add_argument("--batch_size", type=int, default=32)
 ap.add_argument("--seeds", default="0")
+ap.add_argument("--beta", type=float, default=0.0, help="③ distillation weight; 0 = no distillation (= ①)")
+ap.add_argument("--teacher", default="", help="③ teacher npz (KA/KS-change per window); needed if --beta>0")
 a = ap.parse_args()
 seeds = [int(s) for s in a.seeds.split(",")]
 device = "cuda" if torch.cuda.is_available() else "cpu"
-print("device:", device, "| emb", a.emb_size, "| lam", a.lam, "| seeds", seeds)
+print("device:", device, "| emb", a.emb_size, "| lam", a.lam, "| beta", a.beta, "| seeds", seeds)
 
-# ---- labels: group Δθ windows by row_idx ----
+# ---- labels: group Δθ windows by row_idx (+ ③ teacher KA/KS-change per window) ----
 lab = np.load(a.labels)
 recs = lab["records"]; K = int(lab["K"])
-windows = defaultdict(list)                 # row_idx -> [(block_start, theta_before, delta), ...]
-for r in recs:
-    windows[int(r[0])].append((int(r[1]), float(r[2]), float(r[3])))
+teacher_arr = np.load(a.teacher)["teacher"] if a.teacher else None   # [N,2] = (KA-change, KS-change), NaN where none
+windows = defaultdict(list)                 # row_idx -> [(block_start, θ_before, δ, KA_change, KS_change), ...]
+for i, r in enumerate(recs):
+    tka, tks = (float(teacher_arr[i, 0]), float(teacher_arr[i, 1])) if teacher_arr is not None else (np.nan, np.nan)
+    windows[int(r[0])].append((int(r[1]), float(r[2]), float(r[3]), tka, tks))
 rows_with_win = sorted(windows.keys())
 print(f"{len(recs)} windows over {len(rows_with_win)} student rows")
 
@@ -82,18 +86,19 @@ def pcorr(p, y, z):                         # partial corr of p,y controlling z
     d = np.sqrt((1 - rpz ** 2) * (1 - ryz ** 2))
     return (rpy - rpz * ryz) / d if d > 1e-9 else 0.0
 
-def gather(cap, row_idxs):                  # pull block-end [a,g,θ_before] for every window in the batch
+def gather(cap, row_idxs):                  # block-end a, g, θ_before, δ, teacher KA/KS-change per window
     a_, g_ = cap["a"], cap["g"]             # [B, seqlen-1, HID]
     L = a_.shape[1]
-    feats, tgts, tbs = [], [], []
+    A, G, tbs, tgts, tka, tks = [], [], [], [], [], []
     for b, ridx in enumerate(row_idxs):
-        for bs, tb, d in windows[ridx]:
+        for bs, tb, d, ka_c, ks_c in windows[ridx]:
             pos = bs + K - 1                # block-end output index (causal: pre-window + block only)
             if pos >= L:
                 continue
-            feats.append(torch.cat([a_[b, pos], g_[b, pos], a_.new_tensor([tb])]))
-            tgts.append(d); tbs.append(tb)
-    return torch.stack(feats), a_.new_tensor(tgts), np.array(tbs)
+            A.append(a_[b, pos]); G.append(g_[b, pos])
+            tbs.append(tb); tgts.append(d); tka.append(ka_c); tks.append(ks_c)
+    A, G = torch.stack(A), torch.stack(G)
+    return A, G, A.new_tensor(tbs), A.new_tensor(tgts), np.array(tka), np.array(tks)
 
 def run(seed):
     torch.manual_seed(seed); np.random.seed(seed)
@@ -107,10 +112,13 @@ def run(seed):
                                      mlp_layer_num=a.mlp_layer_num, other_config=OTHER), cfg, "iekt")
     HID = a.emb_size
     dhead = DeltaHead(HID).to(device)
+    aux_ka = nn.Linear(HID, 1).to(device)   # ③: block-end KA state a_t -> predict teacher KA-change
+    aux_ks = nn.Linear(HID, 1).to(device)   # ③: block-end KS state g_t -> predict teacher KS-change
     cap = {}
     model.model.que_lstm_layer.register_forward_hook(     lambda m, i, o: cap.__setitem__("a", o[0]))
     model.model.concept_lstm_layer.register_forward_hook( lambda m, i, o: cap.__setitem__("g", o[0]))
-    opt = torch.optim.Adam(list(model.model.parameters()) + list(dhead.parameters()),
+    opt = torch.optim.Adam(list(model.model.parameters()) + list(dhead.parameters())
+                           + list(aux_ka.parameters()) + list(aux_ks.parameters()),
                            lr=1e-3, weight_decay=1e-5)
     mse = nn.MSELoss()
     tr_loader  = DataLoader(Subset(ds, tr_idx),  batch_size=a.batch_size, shuffle=False)
@@ -123,8 +131,16 @@ def run(seed):
             B = data["qseqs"].shape[0]; ridxs = tr_idx[ptr:ptr + B]; ptr += B
             opt.zero_grad()
             _, qikt_loss = model.train_one_step(data)          # correctness+aux loss; hooks fill cap
-            f, t, _ = gather(cap, ridxs)
-            loss = a.corr_w * qikt_loss + a.lam * mse(dhead(f), t)
+            A, G, tb, y, tka, tks = gather(cap, ridxs)
+            loss = a.corr_w * qikt_loss + a.lam * mse(dhead(torch.cat([A, G, tb.unsqueeze(1)], 1)), y)
+            if a.beta > 0:                                     # ③ distillation, only where teacher exists
+                m = ~np.isnan(tka)
+                if m.any():
+                    mm = torch.tensor(m, device=device)
+                    tk = torch.tensor(tka[m], dtype=torch.float32, device=device)
+                    ts = torch.tensor(tks[m], dtype=torch.float32, device=device)
+                    loss = loss + a.beta * (mse(aux_ka(A[mm]).squeeze(-1), tk)
+                                            + mse(aux_ks(G[mm]).squeeze(-1), ts))
             loss.backward(); opt.step()
         model.model.eval(); dhead.eval(); ptr = 0
         P, T, Z = [], [], []
@@ -132,8 +148,9 @@ def run(seed):
             for data in val_loader:
                 B = data["qseqs"].shape[0]; ridxs = val_idx[ptr:ptr + B]; ptr += B
                 model.predict_one_step(data, return_details=True)   # fills cap
-                f, t, tb = gather(cap, ridxs)
-                P.append(dhead(f).cpu().numpy()); T.append(t.cpu().numpy()); Z.append(tb)
+                A, G, tb, y, _, _ = gather(cap, ridxs)
+                dpred = dhead(torch.cat([A, G, tb.unsqueeze(1)], 1))
+                P.append(dpred.cpu().numpy()); T.append(y.cpu().numpy()); Z.append(tb.cpu().numpy())
         P, T, Z = np.concatenate(P), np.concatenate(T), np.concatenate(Z)
         vm = float(np.mean((P - T) ** 2))
         c_ep, pc_ep = np.corrcoef(P, T)[0, 1], pcorr(P, T, Z)
