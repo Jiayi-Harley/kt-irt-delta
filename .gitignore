@@ -6,6 +6,9 @@ pykt-toolkit/
 *.ckpt
 saved_model/
 
+# verbose run logs (the aggregated results_metrics*.jsonl are kept)
+*_run.log
+
 # python
 __pycache__/
 *.pyc

@@ -124,7 +124,7 @@ def run(seed):
     tr_loader  = DataLoader(Subset(ds, tr_idx),  batch_size=a.batch_size, shuffle=False)
     val_loader = DataLoader(Subset(ds, val_idx), batch_size=a.batch_size, shuffle=False)
 
-    best_mse, best = 1e9, (0.0, 0.0)
+    best_mse, bestPTZ = 1e9, None
     for ep in range(a.epochs):
         model.model.train(); dhead.train(); ptr = 0
         for data in tr_loader:
@@ -157,14 +157,17 @@ def run(seed):
         print(f"  seed {seed} ep {ep:>2} | val corr {c_ep:+.3f}  pcorr(block) {pc_ep:+.3f}", flush=True)
         if vm < best_mse:
             best_mse = vm
-            best = (c_ep, pc_ep)
-    return best
+            bestPTZ = (P.copy(), T.copy(), Z.copy())
+    return bestPTZ
 
-print(f"\nseed   raw_corr   block_signal(pcorr)")
-res = []
-for s in seeds:
-    c, pc = run(s); res.append((c, pc))
-    print(f"{s:>4}   {c:>+7.3f}   {pc:>+7.3f}")
-cs = np.array([c for c, _ in res]); pcs = np.array([pc for _, pc in res])
-print(f"mean   {cs.mean():>+7.3f}   {pcs.mean():>+7.3f}")
-print(f"std    {cs.std():>7.3f}   {pcs.std():>7.3f}")
+import re as _re
+from _delta_metrics import finalize
+_m = _re.search(r"W(\d+)K(\d+)", a.labels)
+_W = int(_m.group(1)) if _m else -1
+_task = "multi" if a.corr_w > 0 else "single"
+_tag = f"QIKT-{_task}" + (f"-beta{a.beta}" if a.beta > 0 else "")
+_meta = {"model": _tag, "W": _W, "K": int(K), "emb": a.emb_size, "corr_w": a.corr_w,
+         "lam": a.lam, "beta": a.beta, "dataset": a.dataset}
+_out = os.path.join(_ROOT, "results_metrics.jsonl")
+_ptz = [run(s) for s in seeds]
+finalize(_out, _tag, _meta, _ptz)

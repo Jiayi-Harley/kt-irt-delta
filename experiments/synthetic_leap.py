@@ -8,11 +8,13 @@ over (q, r); a fair simplification.)
 
     python experiments/synthetic_leap.py 20 10   # W (default 20), K (default 10)
 """
-import sys, numpy as np, torch, torch.nn as nn
+import sys, os, json, numpy as np, torch, torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 from EduCDM import EMIRT
 import logging, warnings
 logging.getLogger().setLevel(logging.ERROR); warnings.filterwarnings("ignore")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models"))
+from _delta_metrics import all_metrics, ORDER
 
 rng = np.random.default_rng(0); torch.manual_seed(0)
 
@@ -95,7 +97,7 @@ opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-3)
 mse = nn.MSELoss()
 tr = DataLoader(TensorDataset(seq_q[ti], seq_r[ti], theta_b[ti], y_label[ti]), batch_size=128, shuffle=True)
 
-best = (1e9, 0, 0)
+best = (1e9, 0, 0); best_pv = None
 for ep in range(40):
     model.train()
     for qb, rb, thb, yb in tr:
@@ -107,9 +109,19 @@ for ep in range(40):
     if m < best[0]:
         ct = np.corrcoef(pv.numpy(), y_true[vi].numpy())[0, 1]
         cl = np.corrcoef(pv.numpy(), y_label[vi].numpy())[0, 1]
-        best = (m, ct, cl)
+        best = (m, ct, cl); best_pv = pv.numpy().copy()
 
 base = ((y_label[vi] - y_label[ti].mean()) ** 2).mean().item()
 print(f"baseline val MSE {base:.3f}   LEAP val MSE {best[0]:.3f}   beats: {best[0] < base}")
 print(f"[check 2] corr(LEAP pred, true Δθ)  = {best[1]:+.3f}   (model sound?)")
 print(f"          corr(LEAP pred, label Δθ) = {best[2]:+.3f}")
+
+# full metric suite, computed against the TRUE gain (the gold on synthetic data)
+met = all_metrics(best_pv, y_true[vi].numpy(), theta_b[vi].numpy())
+rec = {"tag": "SYNTH-LEAP", "W": W, "K": K, "corr_label_true": float(c1),
+       **{k: met[k] for k in ORDER}}
+print("metrics vs TRUE gain: " + "  ".join(f"{k} {met[k]:+.4f}" for k in ORDER))
+out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results_metrics_synth.jsonl")
+with open(out, "a") as f:
+    f.write(json.dumps(rec) + "\n")
+print("[appended ->", out, "]")
