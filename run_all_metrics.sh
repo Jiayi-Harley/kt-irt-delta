@@ -1,9 +1,11 @@
 #!/bin/bash
-# Full metric + symmetry sweep for results sections 4.5-4.7 (block-reading kou-jing, original scripts).
+# Full metric + symmetry sweep for the results sections: LEAP and the QIKT baseline read the block.
 # 3 models x 7 label files x 5 seeds; every cell gets all 7 metrics. Results append to results_metrics.jsonl.
-cd "D:/UCL 上课/PROJECT/Century Tech/code" || exit 1
+# Run from the repo root (or anywhere; the script cd's to its own directory). Point PY at the python that
+# has EduCDM + torch + pyKT, e.g. PY=/path/to/env/python ./run_all_metrics.sh
+cd "$(dirname "$0")" || exit 1
 export PYTHONPATH=pykt-toolkit
-PY="E:/anaconda2021python3.9/envs/century/python.exe"
+PY="${PY:-python}"
 SEEDS=0,1,2,3,4
 LOG=results_metrics_run.log
 rm -f results_metrics.jsonl results_metrics_synth.jsonl
